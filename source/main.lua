@@ -31,7 +31,7 @@ local LINE_GAP    <const> = 4
 local CHOICE_PAD  <const> = 6
 local CHOICE_GAP  <const> = 6
 local VIEW_BOTTOM <const> = VIEW_H - 4   -- rows must end above this to be drawn
-local CRANK_STEP  <const> = 45          -- crank degrees per line
+local CRANK_STEP  <const> = 90          -- crank degrees per screen
 local SAVE_KEY    <const> = "progress"
 local STORY_DIR   <const> = "stories/"
 local TITLE_ROWS  <const> = 4      -- menu rows visible at once
@@ -48,7 +48,9 @@ local story       = nil    -- the story being read
 local pageId      = nil
 local history     = {}     -- page ids visited before this one, for B = back
 local layout      = nil    -- cached positions for the current page
-local scrollY     = 0      -- always the top of a row, so no line is drawn half cut off
+local setScreen            -- defined below, used by showPage
+local scrollY     = 0      -- top of the current screen (from layout.screens)
+local screen      = 1      -- which screen of the page is showing
 local crankAccum  = 0
 local selected    = nil    -- index of highlighted choice, nil = still reading
 local titleIndex  = 1
@@ -162,10 +164,8 @@ local function buildLayout(page)
     local y = MARGIN
     local lineH = fontLg:getHeight() + LINE_GAP
 
-    l.rows = {}   -- every line and choice box as { y, bottom }, top to bottom
     for _, text in ipairs(wrapText(page.text, fontLg, TEXT_W)) do
         l.lines[#l.lines + 1] = { text = text, y = y }
-        l.rows[#l.rows + 1] = { y = y, bottom = y + fontLg:getHeight() }
         y += lineH
     end
     y += 10
@@ -175,65 +175,56 @@ local function buildLayout(page)
         local wrapped = wrapText(choice.label, fontBld, TEXT_W - CHOICE_PAD * 2 - 16)
         local h = #wrapped * choiceLineH + CHOICE_PAD * 2
         l.choices[i] = { lines = wrapped, y = y, h = h, data = choice }
-        l.rows[#l.rows + 1] = { y = y, bottom = y + h }
         y += h + CHOICE_GAP
     end
 
-    -- Furthest scroll: the first row from which everything left fits on screen.
-    if #l.rows == 0 then l.rows[1] = { y = MARGIN, bottom = MARGIN } end
-    local lastBottom = l.rows[#l.rows].bottom
-    l.maxScroll = 0
-    for _, row in ipairs(l.rows) do
-        if lastBottom - (row.y - MARGIN) <= VIEW_BOTTOM then
-            l.maxScroll = row.y - MARGIN
-            break
+    -- Split the page into screens. Each screen starts with the first line the
+    -- last one couldn't fit, so nothing shows twice. The choices stay together
+    -- on one screen whenever they fit.
+    local units = {}
+    for _, line in ipairs(l.lines) do
+        units[#units + 1] = { y = line.y, bottom = line.y + fontLg:getHeight() }
+    end
+    if #l.choices > 0 then
+        local first, last = l.choices[1], l.choices[#l.choices]
+        if last.y + last.h - first.y <= VIEW_BOTTOM - MARGIN then
+            units[#units + 1] = { y = first.y, bottom = last.y + last.h }
+        else
+            for _, c in ipairs(l.choices) do units[#units + 1] = { y = c.y, bottom = c.y + c.h } end
+        end
+    end
+
+    l.screens = { 0 }
+    for _, u in ipairs(units) do
+        if u.bottom - l.screens[#l.screens] > VIEW_BOTTOM then
+            l.screens[#l.screens + 1] = u.y - MARGIN
         end
     end
     return l
-end
-
--- Scroll position that puts a row at the top of the screen.
-local function rowTop(row)
-    return math.min(layout.maxScroll, row.y - MARGIN)
-end
-
--- Smallest scroll that still shows everything down to bottomY.
-local function scrollToShow(bottomY)
-    for _, row in ipairs(layout.rows) do
-        if bottomY - (row.y - MARGIN) <= VIEW_BOTTOM then return rowTop(row) end
-    end
-    return layout.maxScroll
 end
 
 local function rowVisible(y, bottom)
     return y - scrollY >= MARGIN and bottom - scrollY <= VIEW_BOTTOM
 end
 
--- Moves the view one row down (dir = 1) or up (dir = -1).
-local function stepRow(dir)
-    if dir > 0 then
-        for _, row in ipairs(layout.rows) do
-            if row.y - MARGIN > scrollY then scrollY = rowTop(row) return end
-        end
-    else
-        for i = #layout.rows, 1, -1 do
-            local row = layout.rows[i]
-            if row.y - MARGIN < scrollY then scrollY = rowTop(row) return end
-        end
-    end
-end
-
 -- ─────────────────────────────────────────────
 -- NAVIGATION
 -- ─────────────────────────────────────────────
+-- Shows screen n of the page. When the choices are on screen, the
+-- first one is highlighted so A picks it right away.
+setScreen = function(n)
+    screen   = math.max(1, math.min(#layout.screens, n))
+    scrollY  = layout.screens[screen]
+    selected = nil
+    local c = layout.choices[1]
+    if c and rowVisible(c.y, c.y + c.h) then selected = 1 end
+end
+
 local function showPage(id)
     pageId   = id
     layout   = buildLayout(story.pages[id])
-    scrollY  = 0
     crankAccum = 0
-    selected = nil
-    -- Short pages: highlight the first choice right away.
-    if layout.maxScroll == 0 and #layout.choices > 0 then selected = 1 end
+    setScreen(1)
     state = STATE_PAGE
     if story.pages[id].ending then clearProgress() else saveProgress() end
 end
@@ -277,60 +268,27 @@ local function goToTitle()
     buildTitleMenu()
 end
 
--- Keeps the highlighted choice on screen.
-local function scrollToSelected()
-    if not selected then return end
-    local c = layout.choices[selected]
-    if c.y - scrollY < MARGIN then
-        scrollY = rowTop(c)
-    elseif c.y + c.h - scrollY > VIEW_BOTTOM then
-        scrollY = scrollToShow(c.y + c.h)
-    end
-end
-
 local function choiceFullyVisible(i)
     local c = layout.choices[i]
     return c and rowVisible(c.y, c.y + c.h)
-end
-
--- Jumps so the first line not yet fully shown is at the top.
-local function nextScreen()
-    for _, row in ipairs(layout.rows) do
-        if row.bottom - scrollY > VIEW_BOTTOM then scrollY = rowTop(row) return end
-    end
-end
-
--- Jumps back a screen, ending on the line just above the current top.
-local function prevScreen()
-    local prev = nil
-    for _, row in ipairs(layout.rows) do
-        if row.y - MARGIN < scrollY then prev = row end
-    end
-    if prev then scrollY = scrollToShow(prev.bottom) end
 end
 
 -- ─────────────────────────────────────────────
 -- INPUT
 -- ─────────────────────────────────────────────
 local function pageDown()
-    if selected then
-        selected = math.min(selected + 1, #layout.choices)
-        scrollToSelected()
-    elseif #layout.choices > 0 and choiceFullyVisible(1) then
-        selected = 1
-        scrollToSelected()
-    else
-        nextScreen()
+    if selected and choiceFullyVisible(selected + 1) then
+        selected += 1
+    elseif not selected then
+        setScreen(screen + 1)
     end
 end
 
 local function pageUp()
-    if selected and selected > 1 then
+    if selected and selected > 1 and choiceFullyVisible(selected - 1) then
         selected -= 1
-        scrollToSelected()
     else
-        if selected and layout.maxScroll > 0 then selected = nil end
-        prevScreen()
+        setScreen(screen - 1)
     end
 end
 
@@ -427,7 +385,7 @@ local function drawPage()
     end
 
     -- Little arrow when there is more to read below.
-    if scrollY < layout.maxScroll then
+    if screen < #layout.screens then
         local cx, cy = SCREEN_W - 14, VIEW_H - 10
         gfx.fillTriangle(cx - 6, cy - 4, cx + 6, cy - 4, cx, cy + 3)
     end
@@ -480,8 +438,8 @@ function pd.update()
         end
 
         crankAccum += pd.getCrankChange()
-        while crankAccum >= CRANK_STEP do stepRow(1)  crankAccum -= CRANK_STEP end
-        while crankAccum <= -CRANK_STEP do stepRow(-1) crankAccum += CRANK_STEP end
+        while crankAccum >= CRANK_STEP do setScreen(screen + 1) crankAccum -= CRANK_STEP end
+        while crankAccum <= -CRANK_STEP do setScreen(screen - 1) crankAccum += CRANK_STEP end
     end
 
     gfx.clear(gfx.kColorWhite)
