@@ -30,7 +30,8 @@ local VIEW_H      <const> = SCREEN_H - FOOTER_H
 local LINE_GAP    <const> = 4
 local CHOICE_PAD  <const> = 6
 local CHOICE_GAP  <const> = 6
-local SCROLL_STEP <const> = 40
+local VIEW_BOTTOM <const> = VIEW_H - 4   -- rows must end above this to be drawn
+local CRANK_STEP  <const> = 45          -- crank degrees per line
 local SAVE_KEY    <const> = "progress"
 local STORY_DIR   <const> = "stories/"
 local TITLE_ROWS  <const> = 4      -- menu rows visible at once
@@ -47,7 +48,8 @@ local story       = nil    -- the story being read
 local pageId      = nil
 local history     = {}     -- page ids visited before this one, for B = back
 local layout      = nil    -- cached positions for the current page
-local scrollY     = 0
+local scrollY     = 0      -- always the top of a row, so no line is drawn half cut off
+local crankAccum  = 0
 local selected    = nil    -- index of highlighted choice, nil = still reading
 local titleIndex  = 1
 local titleTop    = 1      -- first menu row shown, for long story lists
@@ -160,8 +162,10 @@ local function buildLayout(page)
     local y = MARGIN
     local lineH = fontLg:getHeight() + LINE_GAP
 
+    l.rows = {}   -- every line and choice box as { y, bottom }, top to bottom
     for _, text in ipairs(wrapText(page.text, fontLg, TEXT_W)) do
         l.lines[#l.lines + 1] = { text = text, y = y }
+        l.rows[#l.rows + 1] = { y = y, bottom = y + fontLg:getHeight() }
         y += lineH
     end
     y += 10
@@ -171,12 +175,52 @@ local function buildLayout(page)
         local wrapped = wrapText(choice.label, fontBld, TEXT_W - CHOICE_PAD * 2 - 16)
         local h = #wrapped * choiceLineH + CHOICE_PAD * 2
         l.choices[i] = { lines = wrapped, y = y, h = h, data = choice }
+        l.rows[#l.rows + 1] = { y = y, bottom = y + h }
         y += h + CHOICE_GAP
     end
 
-    l.contentH = y + MARGIN - CHOICE_GAP
-    l.maxScroll = math.max(0, l.contentH - VIEW_H)
+    -- Furthest scroll: the first row from which everything left fits on screen.
+    if #l.rows == 0 then l.rows[1] = { y = MARGIN, bottom = MARGIN } end
+    local lastBottom = l.rows[#l.rows].bottom
+    l.maxScroll = 0
+    for _, row in ipairs(l.rows) do
+        if lastBottom - (row.y - MARGIN) <= VIEW_BOTTOM then
+            l.maxScroll = row.y - MARGIN
+            break
+        end
+    end
     return l
+end
+
+-- Scroll position that puts a row at the top of the screen.
+local function rowTop(row)
+    return math.min(layout.maxScroll, row.y - MARGIN)
+end
+
+-- Smallest scroll that still shows everything down to bottomY.
+local function scrollToShow(bottomY)
+    for _, row in ipairs(layout.rows) do
+        if bottomY - (row.y - MARGIN) <= VIEW_BOTTOM then return rowTop(row) end
+    end
+    return layout.maxScroll
+end
+
+local function rowVisible(y, bottom)
+    return y - scrollY >= MARGIN and bottom - scrollY <= VIEW_BOTTOM
+end
+
+-- Moves the view one row down (dir = 1) or up (dir = -1).
+local function stepRow(dir)
+    if dir > 0 then
+        for _, row in ipairs(layout.rows) do
+            if row.y - MARGIN > scrollY then scrollY = rowTop(row) return end
+        end
+    else
+        for i = #layout.rows, 1, -1 do
+            local row = layout.rows[i]
+            if row.y - MARGIN < scrollY then scrollY = rowTop(row) return end
+        end
+    end
 end
 
 -- ─────────────────────────────────────────────
@@ -186,6 +230,7 @@ local function showPage(id)
     pageId   = id
     layout   = buildLayout(story.pages[id])
     scrollY  = 0
+    crankAccum = 0
     selected = nil
     -- Short pages: highlight the first choice right away.
     if layout.maxScroll == 0 and #layout.choices > 0 then selected = 1 end
@@ -237,16 +282,31 @@ local function scrollToSelected()
     if not selected then return end
     local c = layout.choices[selected]
     if c.y - scrollY < MARGIN then
-        scrollY = c.y - MARGIN
-    elseif c.y + c.h - scrollY > VIEW_H - MARGIN then
-        scrollY = c.y + c.h - VIEW_H + MARGIN
+        scrollY = rowTop(c)
+    elseif c.y + c.h - scrollY > VIEW_BOTTOM then
+        scrollY = scrollToShow(c.y + c.h)
     end
-    scrollY = math.max(0, math.min(layout.maxScroll, scrollY))
 end
 
 local function choiceFullyVisible(i)
     local c = layout.choices[i]
-    return c and c.y + c.h - scrollY <= VIEW_H
+    return c and rowVisible(c.y, c.y + c.h)
+end
+
+-- Jumps so the first line not yet fully shown is at the top.
+local function nextScreen()
+    for _, row in ipairs(layout.rows) do
+        if row.bottom - scrollY > VIEW_BOTTOM then scrollY = rowTop(row) return end
+    end
+end
+
+-- Jumps back a screen, ending on the line just above the current top.
+local function prevScreen()
+    local prev = nil
+    for _, row in ipairs(layout.rows) do
+        if row.y - MARGIN < scrollY then prev = row end
+    end
+    if prev then scrollY = scrollToShow(prev.bottom) end
 end
 
 -- ─────────────────────────────────────────────
@@ -260,7 +320,7 @@ local function pageDown()
         selected = 1
         scrollToSelected()
     else
-        scrollY = math.min(layout.maxScroll, scrollY + SCROLL_STEP)
+        nextScreen()
     end
 end
 
@@ -270,7 +330,7 @@ local function pageUp()
         scrollToSelected()
     else
         if selected and layout.maxScroll > 0 then selected = nil end
-        scrollY = math.max(0, scrollY - SCROLL_STEP)
+        prevScreen()
     end
 end
 
@@ -342,16 +402,15 @@ end
 
 local function drawPage()
     for _, line in ipairs(layout.lines) do
-        local y = line.y - scrollY
-        if y > -40 and y < VIEW_H then
-            fontLg:drawText(line.text, MARGIN, y)
+        if rowVisible(line.y, line.y + fontLg:getHeight()) then
+            fontLg:drawText(line.text, MARGIN, line.y - scrollY)
         end
     end
 
     local choiceLineH = fontBld:getHeight() + 2
     for i, c in ipairs(layout.choices) do
         local y = c.y - scrollY
-        if y + c.h > 0 and y < VIEW_H then
+        if rowVisible(c.y, c.y + c.h) then
             local isSel = (i == selected)
             if isSel then
                 gfx.fillRoundRect(MARGIN, y, TEXT_W, c.h, 6)
@@ -420,10 +479,9 @@ function pd.update()
             goBack()
         end
 
-        local crank = pd.getCrankChange()
-        if crank ~= 0 and layout.maxScroll > 0 then
-            scrollY = math.max(0, math.min(layout.maxScroll, scrollY + crank))
-        end
+        crankAccum += pd.getCrankChange()
+        while crankAccum >= CRANK_STEP do stepRow(1)  crankAccum -= CRANK_STEP end
+        while crankAccum <= -CRANK_STEP do stepRow(-1) crankAccum += CRANK_STEP end
     end
 
     gfx.clear(gfx.kColorWhite)
