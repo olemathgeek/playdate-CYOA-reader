@@ -33,6 +33,7 @@ local CHOICE_PAD  <const> = 6
 local CHOICE_GAP  <const> = 6
 local VIEW_BOTTOM <const> = VIEW_H - 4   -- rows must end above this to be drawn
 local CRANK_STEP  <const> = 90          -- crank degrees per screen
+local CRANK_DIR   <const> = -1          -- -1: turning backward moves forward; flip to 1 to reverse
 local SAVE_KEY    <const> = "progress"
 local STORY_DIR   <const> = "stories/"
 local MENU_TOP    <const> = 48     -- main menu buttons fill from here...
@@ -474,7 +475,7 @@ function pd.update()
         end
         local ticks = pd.getCrankTicks(8)
         if ticks ~= 0 then
-            titleIndex = math.max(1, math.min(#titleItems, titleIndex + ticks))
+            titleIndex = math.max(1, math.min(#titleItems, titleIndex + ticks * CRANK_DIR))
         end
         scrollMenuToSelected()
     else
@@ -488,7 +489,7 @@ function pd.update()
             goBack()
         end
 
-        crankAccum += pd.getCrankChange()
+        crankAccum += pd.getCrankChange() * CRANK_DIR
         while crankAccum >= CRANK_STEP do setScreen(screen + 1) crankAccum -= CRANK_STEP end
         while crankAccum <= -CRANK_STEP do setScreen(screen - 1) crankAccum += CRANK_STEP end
     end
