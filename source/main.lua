@@ -10,6 +10,7 @@
 --   B                  : go back one page
 
 import "CoreLibs/graphics"
+import "CoreLibs/crank"
 
 local pd  <const> = playdate
 local gfx <const> = playdate.graphics
@@ -36,7 +37,9 @@ local SAVE_KEY    <const> = "progress"
 local STORY_DIR   <const> = "stories/"
 local MENU_TOP    <const> = 48     -- main menu buttons fill from here...
 local MENU_BOTTOM <const> = VIEW_H - 4   -- ...to here, all on screen at once
-local MENU_MIN_H  <const> = 26     -- shortest a button row can get before adding a column
+local MENU_ROW_H  <const> = 32     -- height of one story button in the main menu
+local MENU_KEEP_H <const> = 44     -- "Keep reading" button: two lines, label and story title
+local MENU_GAP    <const> = 4
 
 local STATE_TITLE <const> = 1
 local STATE_PAGE  <const> = 2
@@ -57,6 +60,7 @@ local crankAccum  = 0
 local selected    = nil    -- index of highlighted choice, nil = still reading
 local titleIndex  = 1
 local titleItems  = {}
+local titleScroll = 0      -- main menu scroll offset in pixels
 
 -- ─────────────────────────────────────────────
 -- STORIES
@@ -252,7 +256,7 @@ local function buildTitleMenu()
     titleItems = {}
     local savedStory, savedPage, savedHistory = loadProgress()
     if savedStory then
-        titleItems[#titleItems + 1] = { label = "Keep reading: " .. savedStory.title, action = function()
+        titleItems[#titleItems + 1] = { label = "Keep reading", sub = savedStory.title, action = function()
             story   = savedStory
             history = savedHistory
             showPage(savedPage)
@@ -262,6 +266,7 @@ local function buildTitleMenu()
         titleItems[#titleItems + 1] = { label = s.title, action = function() startNew(s) end }
     end
     titleIndex = 1
+    titleScroll = 0
 end
 
 local function goToTitle()
@@ -322,23 +327,34 @@ local function drawFooter(hint)
     fontMd:drawText(hint, MARGIN, VIEW_H + (FOOTER_H - fontMd:getHeight()) // 2 + 1)
 end
 
--- Sizes the main menu so every option fits on screen at once: buttons
--- shrink to fit, and a second (or third) column is added if needed.
-local function menuLayout()
-    local n = #titleItems
+-- Main menu: one full-width column of buttons that scrolls to keep the
+-- highlighted one on screen, so long story titles are never cut off.
+local function menuItemY(i)
+    local y = 0
+    for j = 1, i - 1 do
+        y += (titleItems[j].sub and MENU_KEEP_H or MENU_ROW_H) + MENU_GAP
+    end
+    return y
+end
+
+local function scrollMenuToSelected()
     local avail = MENU_BOTTOM - MENU_TOP
-    local perCol = math.max(1, avail // MENU_MIN_H)
-    local cols = math.max(1, math.ceil(n / perCol))
-    local rows = math.ceil(n / cols)
-    local rowH = math.min(40, avail // rows)
-    local gap = math.max(2, math.min(6, rowH - 24))
-    local totalW = (cols == 1) and 320 or (SCREEN_W - MARGIN * 2)
-    local boxW = (totalW - (cols - 1) * 8) // cols
-    return {
-        cols = cols, rows = rows, rowH = rowH, boxW = boxW, boxH = rowH - gap,
-        left = (SCREEN_W - totalW) // 2,
-        top  = MENU_TOP + (avail - rows * rowH) // 2,
-    }
+    local item = titleItems[titleIndex]
+    if not item then return end
+    local y = menuItemY(titleIndex)
+    local h = item.sub and MENU_KEEP_H or MENU_ROW_H
+    if y < titleScroll then
+        titleScroll = y
+    elseif y + h > titleScroll + avail then
+        titleScroll = y + h - avail
+    end
+end
+
+local function fitText(font, text, w)
+    while font:getTextWidth(text) > w and #text > 4 do
+        text = text:sub(1, -5) .. "..."
+    end
+    return text
 end
 
 local function drawTitle()
@@ -352,28 +368,42 @@ local function drawTitle()
         return
     end
 
-    local m = menuLayout()
+    local x, w = MARGIN, TEXT_W
+    gfx.setClipRect(0, MENU_TOP, SCREEN_W, MENU_BOTTOM - MENU_TOP)
     for i, item in ipairs(titleItems) do
-        local col = (i - 1) // m.rows
-        local row = (i - 1) % m.rows
-        local x = m.left + col * (m.boxW + 8)
-        local y = m.top + row * m.rowH
-        local label = item.label
-        while fontBld:getTextWidth(label) > m.boxW - 12 and #label > 4 do
-            label = label:sub(1, -5) .. "..."
+        local y = MENU_TOP + menuItemY(i) - titleScroll
+        local h = item.sub and MENU_KEEP_H or MENU_ROW_H
+        if y + h > MENU_TOP and y < MENU_BOTTOM then
+            if i == titleIndex then
+                gfx.fillRoundRect(x, y, w, h, 6)
+                gfx.setImageDrawMode(gfx.kDrawModeFillWhite)
+            else
+                gfx.drawRoundRect(x, y, w, h, 6)
+            end
+            local label = fitText(fontBld, item.label, w - 12)
+            if item.sub then
+                local sub = fitText(fontMd, item.sub, w - 12)
+                local top = y + (h - fontBld:getHeight() - fontMd:getHeight() - 2) / 2
+                fontBld:drawText(label, x + (w - fontBld:getTextWidth(label)) / 2, top)
+                fontMd:drawText(sub, x + (w - fontMd:getTextWidth(sub)) / 2, top + fontBld:getHeight() + 2)
+            else
+                fontBld:drawText(label, x + (w - fontBld:getTextWidth(label)) / 2, y + (h - fontBld:getHeight()) / 2)
+            end
+            gfx.setImageDrawMode(gfx.kDrawModeCopy)
         end
-        local tw = fontBld:getTextWidth(label)
-        if i == titleIndex then
-            gfx.fillRoundRect(x, y, m.boxW, m.boxH, 6)
-            gfx.setImageDrawMode(gfx.kDrawModeFillWhite)
-        else
-            gfx.drawRoundRect(x, y, m.boxW, m.boxH, 6)
-        end
-        fontBld:drawText(label, x + (m.boxW - tw) / 2, y + (m.boxH - fontBld:getHeight()) / 2)
-        gfx.setImageDrawMode(gfx.kDrawModeCopy)
+    end
+    gfx.clearClipRect()
+
+    -- Arrows on the right when there are more stories above or below.
+    local total = menuItemY(#titleItems + 1) - MENU_GAP
+    if titleScroll > 0 then
+        gfx.fillTriangle(SCREEN_W - 7, MENU_TOP - 8, SCREEN_W - 11, MENU_TOP - 2, SCREEN_W - 3, MENU_TOP - 2)
+    end
+    if titleScroll + (MENU_BOTTOM - MENU_TOP) < total then
+        gfx.fillTriangle(SCREEN_W - 7, MENU_BOTTOM + 2, SCREEN_W - 11, MENU_BOTTOM - 4, SCREEN_W - 3, MENU_BOTTOM - 4)
     end
 
-    drawFooter("Up/Down: pick a story     A: read")
+    drawFooter("Up/Down or crank: pick a story     A: read")
 end
 
 local function drawPage()
@@ -435,18 +465,18 @@ buildTitleMenu()
 
 function pd.update()
     if state == STATE_TITLE then
-        local rows = menuLayout().rows
         if pd.buttonJustPressed(pd.kButtonUp) then
             titleIndex = math.max(1, titleIndex - 1)
         elseif pd.buttonJustPressed(pd.kButtonDown) then
             titleIndex = math.min(#titleItems, titleIndex + 1)
-        elseif pd.buttonJustPressed(pd.kButtonLeft) and titleIndex > rows then
-            titleIndex -= rows
-        elseif pd.buttonJustPressed(pd.kButtonRight) and titleIndex + rows <= #titleItems then
-            titleIndex += rows
         elseif pd.buttonJustPressed(pd.kButtonA) and titleItems[titleIndex] then
             titleItems[titleIndex].action()
         end
+        local ticks = pd.getCrankTicks(8)
+        if ticks ~= 0 then
+            titleIndex = math.max(1, math.min(#titleItems, titleIndex + ticks))
+        end
+        scrollMenuToSelected()
     else
         if pd.buttonJustPressed(pd.kButtonDown) then
             pageDown()

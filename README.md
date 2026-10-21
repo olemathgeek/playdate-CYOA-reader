@@ -4,7 +4,7 @@ An easy-reader choose-your-own-adventure for the Playdate, made for early reader
 Big text, short sentences, and simple choices.
 
 ## Controls
-- **Main menu**: pick a story from the list, or "Keep reading" to go back to the last page you were on
+- **Main menu**: Up/Down or the crank scrolls the story list; pick a story, or "Keep reading" to go back to the last page you were on
 - **Down / crank**: read more of the page, then highlight a choice
 - **Up / Down**: move between choices
 - **A**: pick the highlighted choice
