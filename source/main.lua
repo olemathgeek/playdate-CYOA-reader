@@ -111,6 +111,8 @@ end
 -- ─────────────────────────────────────────────
 local function saveProgress()
     if state ~= STATE_PAGE then return end
+    -- A finished story has nothing to come back to.
+    if story.pages[pageId].ending then return end
     pd.datastore.write({ story = story.file, page = pageId, history = history }, SAVE_KEY)
 end
 
