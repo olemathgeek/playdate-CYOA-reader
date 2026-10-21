@@ -492,7 +492,7 @@ menu:addMenuItem("title screen", goToTitle)
 menu:addMenuItem("start over", function()
     if state == STATE_PAGE then startNew() end
 end)
-menu:addMenuItem("reset read history", function()
+menu:addMenuItem("reset history", function()
     resetReadHistory()
     if state == STATE_TITLE then
         local index, scroll = titleIndex, titleScroll
