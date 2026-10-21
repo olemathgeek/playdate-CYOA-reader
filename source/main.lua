@@ -182,16 +182,18 @@ local function buildLayout(page)
     -- Split the page into screens. Each screen starts with the first line the
     -- last one couldn't fit, so nothing shows twice. The choices stay together
     -- on one screen whenever they fit.
+    -- Each unit records which screen it lands on; things are only drawn
+    -- on their own screen.
     local units = {}
     for _, line in ipairs(l.lines) do
-        units[#units + 1] = { y = line.y, bottom = line.y + fontLg:getHeight() }
+        units[#units + 1] = { y = line.y, bottom = line.y + fontLg:getHeight(), items = { line } }
     end
     if #l.choices > 0 then
         local first, last = l.choices[1], l.choices[#l.choices]
         if last.y + last.h - first.y <= VIEW_BOTTOM - MARGIN then
-            units[#units + 1] = { y = first.y, bottom = last.y + last.h }
+            units[#units + 1] = { y = first.y, bottom = last.y + last.h, items = l.choices }
         else
-            for _, c in ipairs(l.choices) do units[#units + 1] = { y = c.y, bottom = c.y + c.h } end
+            for _, c in ipairs(l.choices) do units[#units + 1] = { y = c.y, bottom = c.y + c.h, items = { c } } end
         end
     end
 
@@ -200,13 +202,11 @@ local function buildLayout(page)
         if u.bottom - l.screens[#l.screens] > VIEW_BOTTOM then
             l.screens[#l.screens + 1] = u.y - MARGIN
         end
+        for _, item in ipairs(u.items) do item.screen = #l.screens end
     end
     return l
 end
 
-local function rowVisible(y, bottom)
-    return y - scrollY >= MARGIN and bottom - scrollY <= VIEW_BOTTOM
-end
 
 -- ─────────────────────────────────────────────
 -- NAVIGATION
@@ -218,7 +218,7 @@ setScreen = function(n)
     scrollY  = layout.screens[screen]
     selected = nil
     local c = layout.choices[1]
-    if c and rowVisible(c.y, c.y + c.h) then selected = 1 end
+    if c and c.screen == screen then selected = 1 end
 end
 
 local function showPage(id)
@@ -268,25 +268,27 @@ local function goToTitle()
     buildTitleMenu()
 end
 
-local function choiceFullyVisible(i)
-    local c = layout.choices[i]
-    return c and rowVisible(c.y, c.y + c.h)
-end
-
 -- ─────────────────────────────────────────────
 -- INPUT
 -- ─────────────────────────────────────────────
+-- Moves the highlight to choice i, turning to its screen if needed.
+local function selectChoice(i)
+    local c = layout.choices[i]
+    if c.screen ~= screen then setScreen(c.screen) end
+    selected = i
+end
+
 local function pageDown()
-    if selected and choiceFullyVisible(selected + 1) then
-        selected += 1
-    elseif not selected then
+    if selected then
+        if layout.choices[selected + 1] then selectChoice(selected + 1) end
+    else
         setScreen(screen + 1)
     end
 end
 
 local function pageUp()
-    if selected and selected > 1 and choiceFullyVisible(selected - 1) then
-        selected -= 1
+    if selected and selected > 1 then
+        selectChoice(selected - 1)
     else
         setScreen(screen - 1)
     end
@@ -374,7 +376,7 @@ end
 
 local function drawPage()
     for _, line in ipairs(layout.lines) do
-        if rowVisible(line.y, line.y + fontLg:getHeight()) then
+        if line.screen == screen then
             fontLg:drawText(line.text, MARGIN, line.y - scrollY)
         end
     end
@@ -382,7 +384,7 @@ local function drawPage()
     local choiceLineH = fontBld:getHeight() + 2
     for i, c in ipairs(layout.choices) do
         local y = c.y - scrollY
-        if rowVisible(c.y, c.y + c.h) then
+        if c.screen == screen then
             local isSel = (i == selected)
             if isSel then
                 gfx.fillRoundRect(MARGIN, y, TEXT_W, c.h, 6)
