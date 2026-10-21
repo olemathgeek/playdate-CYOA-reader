@@ -124,7 +124,7 @@ local function loadProgress()
     local data = pd.datastore.read(SAVE_KEY)
     if data == nil then return nil end
     local s = findStory(data.story)
-    if s == nil or s.pages[data.page] == nil then return nil end
+    if s == nil or s.pages[data.page] == nil or s.pages[data.page].ending then return nil end
     local cleanHistory = {}
     for _, id in ipairs(data.history or {}) do
         if s.pages[id] then cleanHistory[#cleanHistory + 1] = id end
