@@ -1,0 +1,6 @@
+name=Story Paths
+author=
+description=An easy-reader choose-your-own-adventure for early readers.
+bundleID=com.olemathgeek.cyoareader
+version=1.0.0
+buildNumber=1
