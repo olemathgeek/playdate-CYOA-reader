@@ -34,7 +34,9 @@ local VIEW_BOTTOM <const> = VIEW_H - 4   -- rows must end above this to be drawn
 local CRANK_STEP  <const> = 90          -- crank degrees per screen
 local SAVE_KEY    <const> = "progress"
 local STORY_DIR   <const> = "stories/"
-local TITLE_ROWS  <const> = 4      -- menu rows visible at once
+local MENU_TOP    <const> = 48     -- main menu buttons fill from here...
+local MENU_BOTTOM <const> = VIEW_H - 4   -- ...to here, all on screen at once
+local MENU_MIN_H  <const> = 26     -- shortest a button row can get before adding a column
 
 local STATE_TITLE <const> = 1
 local STATE_PAGE  <const> = 2
@@ -54,7 +56,6 @@ local screen      = 1      -- which screen of the page is showing
 local crankAccum  = 0
 local selected    = nil    -- index of highlighted choice, nil = still reading
 local titleIndex  = 1
-local titleTop    = 1      -- first menu row shown, for long story lists
 local titleItems  = {}
 
 -- ─────────────────────────────────────────────
@@ -259,7 +260,6 @@ local function buildTitleMenu()
         titleItems[#titleItems + 1] = { label = s.title, action = function() startNew(s) end }
     end
     titleIndex = 1
-    titleTop   = 1
 end
 
 local function goToTitle()
@@ -318,9 +318,28 @@ local function drawFooter(hint)
     fontMd:drawText(hint, MARGIN, VIEW_H + (FOOTER_H - fontMd:getHeight()) // 2 + 1)
 end
 
+-- Sizes the main menu so every option fits on screen at once: buttons
+-- shrink to fit, and a second (or third) column is added if needed.
+local function menuLayout()
+    local n = #titleItems
+    local avail = MENU_BOTTOM - MENU_TOP
+    local perCol = math.max(1, avail // MENU_MIN_H)
+    local cols = math.max(1, math.ceil(n / perCol))
+    local rows = math.ceil(n / cols)
+    local rowH = math.min(40, avail // rows)
+    local gap = math.max(2, math.min(6, rowH - 24))
+    local totalW = (cols == 1) and 320 or (SCREEN_W - MARGIN * 2)
+    local boxW = (totalW - (cols - 1) * 8) // cols
+    return {
+        cols = cols, rows = rows, rowH = rowH, boxW = boxW, boxH = rowH - gap,
+        left = (SCREEN_W - totalW) // 2,
+        top  = MENU_TOP + (avail - rows * rowH) // 2,
+    }
+end
+
 local function drawTitle()
     local heading = "Story Paths"
-    fontLg:drawText(heading, (SCREEN_W - fontLg:getTextWidth(heading)) / 2, 16)
+    fontLg:drawText(heading, (SCREEN_W - fontLg:getTextWidth(heading)) / 2, 8)
 
     if #titleItems == 0 then
         local msg = "No stories found in source/stories/"
@@ -329,31 +348,26 @@ local function drawTitle()
         return
     end
 
-    local boxW, boxH = 320, 34
-    local x = (SCREEN_W - boxW) / 2
-    local last = math.min(#titleItems, titleTop + TITLE_ROWS - 1)
-    for i = titleTop, last do
-        local item = titleItems[i]
-        local y = 56 + (i - titleTop) * (boxH + 6)
+    local m = menuLayout()
+    for i, item in ipairs(titleItems) do
+        local col = (i - 1) // m.rows
+        local row = (i - 1) % m.rows
+        local x = m.left + col * (m.boxW + 8)
+        local y = m.top + row * m.rowH
         local label = item.label
-        while fontBld:getTextWidth(label) > boxW - 16 and #label > 4 do
+        while fontBld:getTextWidth(label) > m.boxW - 12 and #label > 4 do
             label = label:sub(1, -5) .. "..."
         end
         local tw = fontBld:getTextWidth(label)
         if i == titleIndex then
-            gfx.fillRoundRect(x, y, boxW, boxH, 6)
+            gfx.fillRoundRect(x, y, m.boxW, m.boxH, 6)
             gfx.setImageDrawMode(gfx.kDrawModeFillWhite)
         else
-            gfx.drawRoundRect(x, y, boxW, boxH, 6)
+            gfx.drawRoundRect(x, y, m.boxW, m.boxH, 6)
         end
-        fontBld:drawText(label, x + (boxW - tw) / 2, y + (boxH - fontBld:getHeight()) / 2)
+        fontBld:drawText(label, x + (m.boxW - tw) / 2, y + (m.boxH - fontBld:getHeight()) / 2)
         gfx.setImageDrawMode(gfx.kDrawModeCopy)
     end
-
-    -- Arrows when the list is longer than the screen.
-    local cx = SCREEN_W - 20
-    if titleTop > 1 then gfx.fillTriangle(cx - 6, 64, cx + 6, 64, cx, 57) end
-    if last < #titleItems then gfx.fillTriangle(cx - 6, VIEW_H - 14, cx + 6, VIEW_H - 14, cx, VIEW_H - 7) end
 
     drawFooter("Up/Down: pick a story     A: read")
 end
@@ -417,15 +431,18 @@ buildTitleMenu()
 
 function pd.update()
     if state == STATE_TITLE then
+        local rows = menuLayout().rows
         if pd.buttonJustPressed(pd.kButtonUp) then
             titleIndex = math.max(1, titleIndex - 1)
         elseif pd.buttonJustPressed(pd.kButtonDown) then
             titleIndex = math.min(#titleItems, titleIndex + 1)
+        elseif pd.buttonJustPressed(pd.kButtonLeft) and titleIndex > rows then
+            titleIndex -= rows
+        elseif pd.buttonJustPressed(pd.kButtonRight) and titleIndex + rows <= #titleItems then
+            titleIndex += rows
         elseif pd.buttonJustPressed(pd.kButtonA) and titleItems[titleIndex] then
             titleItems[titleIndex].action()
         end
-        if titleIndex < titleTop then titleTop = titleIndex end
-        if titleIndex > titleTop + TITLE_ROWS - 1 then titleTop = titleIndex - TITLE_ROWS + 1 end
     else
         if pd.buttonJustPressed(pd.kButtonDown) then
             pageDown()
