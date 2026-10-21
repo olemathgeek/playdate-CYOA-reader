@@ -1,7 +1,7 @@
 -- Story Paths
 -- An easy-reader choose-your-own-adventure for Playdate.
 -- Stories are JSON files in source/stories/ (see README for the format).
--- The reader's spot is saved with playdate.datastore so "Keep reading"
+-- The reader's spot is saved with playdate.datastore so "Continue story"
 -- picks up where they left off.
 --
 -- Controls:
@@ -34,11 +34,12 @@ local CHOICE_GAP  <const> = 6
 local VIEW_BOTTOM <const> = VIEW_H - 4   -- rows must end above this to be drawn
 local CRANK_STEP  <const> = 90          -- crank degrees per screen
 local SAVE_KEY    <const> = "progress"
+local READ_KEY    <const> = "read"     -- { [story file] = true } for stories read to an ending
 local STORY_DIR   <const> = "stories/"
 local MENU_TOP    <const> = 48     -- main menu buttons fill from here...
 local MENU_BOTTOM <const> = VIEW_H - 4   -- ...to here, all on screen at once
 local MENU_ROW_H  <const> = 32     -- height of one story button in the main menu
-local MENU_KEEP_H <const> = 44     -- "Keep reading" button: two lines, label and story title
+local MENU_KEEP_H <const> = 44     -- "Continue story" button: two lines, label and story title
 local MENU_GAP    <const> = 4
 
 local STATE_TITLE <const> = 1
@@ -60,6 +61,7 @@ local crankAccum  = 0
 local selected    = nil    -- index of highlighted choice, nil = still reading
 local titleIndex  = 1
 local titleItems  = {}
+local readStories = pd.datastore.read(READ_KEY) or {}
 local titleScroll = 0      -- main menu scroll offset in pixels
 
 -- ─────────────────────────────────────────────
@@ -124,6 +126,17 @@ local function clearProgress()
     pd.datastore.delete(SAVE_KEY)
 end
 
+local function markRead(file)
+    if readStories[file] then return end
+    readStories[file] = true
+    pd.datastore.write(readStories, READ_KEY)
+end
+
+local function resetReadHistory()
+    readStories = {}
+    pd.datastore.delete(READ_KEY)
+end
+
 local function loadProgress()
     local data = pd.datastore.read(SAVE_KEY)
     if data == nil then return nil end
@@ -159,8 +172,8 @@ end
 local function choicesFor(page)
     if page.ending then
         return {
-            { label = "Read again!", restart = true },
             { label = "Pick a new story", menu = true },
+            { label = "Read again!", restart = true },
         }
     end
     return page.choices or {}
@@ -233,7 +246,12 @@ local function showPage(id)
     crankAccum = 0
     setScreen(1)
     state = STATE_PAGE
-    if story.pages[id].ending then clearProgress() else saveProgress() end
+    if story.pages[id].ending then
+        clearProgress()
+        markRead(story.file)
+    else
+        saveProgress()
+    end
 end
 
 local function startNew(s)
@@ -256,14 +274,19 @@ local function buildTitleMenu()
     titleItems = {}
     local savedStory, savedPage, savedHistory = loadProgress()
     if savedStory then
-        titleItems[#titleItems + 1] = { label = "Keep reading", sub = savedStory.title, action = function()
+        titleItems[#titleItems + 1] = { label = "Continue story", sub = savedStory.title, action = function()
             story   = savedStory
             history = savedHistory
             showPage(savedPage)
         end }
     end
-    for _, s in ipairs(stories) do
-        titleItems[#titleItems + 1] = { label = s.title, action = function() startNew(s) end }
+    -- Unread stories first, then read ones; each group stays A to Z.
+    for _, wantRead in ipairs({ false, true }) do
+        for _, s in ipairs(stories) do
+            if (readStories[s.file] == true) == wantRead then
+                titleItems[#titleItems + 1] = { label = s.title, read = wantRead, action = function() startNew(s) end }
+            end
+        end
     end
     titleIndex = 1
     titleScroll = 0
@@ -376,11 +399,28 @@ local function drawTitle()
         if y + h > MENU_TOP and y < MENU_BOTTOM then
             if i == titleIndex then
                 gfx.fillRoundRect(x, y, w, h, 6)
-                gfx.setImageDrawMode(gfx.kDrawModeFillWhite)
             else
+                if item.read then
+                    -- Very light dotted shade (4 black dots per 8x8) for read stories.
+                    gfx.setPattern({ 0xFF, 0xEE, 0xFF, 0xFF, 0xFF, 0xBB, 0xFF, 0xFF })
+                    gfx.fillRoundRect(x, y, w, h, 6)
+                    gfx.setColor(gfx.kColorBlack)
+                end
                 gfx.drawRoundRect(x, y, w, h, 6)
             end
-            local label = fitText(fontBld, item.label, w - 12)
+            if item.read then
+                -- Small check mark on the right for stories already read.
+                if i == titleIndex then gfx.setColor(gfx.kColorWhite) end
+                local cx, cy = x + w - 22, y + h / 2
+                gfx.setLineWidth(2)
+                gfx.drawLine(cx, cy, cx + 4, cy + 4)
+                gfx.drawLine(cx + 4, cy + 4, cx + 11, cy - 5)
+                gfx.setLineWidth(1)
+                gfx.setColor(gfx.kColorBlack)
+            end
+            if i == titleIndex then gfx.setImageDrawMode(gfx.kDrawModeFillWhite) end
+            -- Leave room on both sides so a long title never runs into the check.
+            local label = fitText(fontBld, item.label, item.read and w - 64 or w - 12)
             if item.sub then
                 local sub = fitText(fontMd, item.sub, w - 12)
                 local top = y + (h - fontBld:getHeight() - fontMd:getHeight() - 2) / 2
@@ -451,6 +491,14 @@ local menu = pd.getSystemMenu()
 menu:addMenuItem("title screen", goToTitle)
 menu:addMenuItem("start over", function()
     if state == STATE_PAGE then startNew() end
+end)
+menu:addMenuItem("reset read history", function()
+    resetReadHistory()
+    if state == STATE_TITLE then
+        local index, scroll = titleIndex, titleScroll
+        buildTitleMenu()
+        titleIndex, titleScroll = index, scroll
+    end
 end)
 
 -- Save when the game is closed or the device goes to sleep.
