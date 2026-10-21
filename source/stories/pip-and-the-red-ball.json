@@ -1,0 +1,35 @@
+{
+    "title": "Pip and the Red Ball",
+    "start": "start",
+    "pages": {
+        "start": {
+            "text": "Pip is a little dog. Pip has a red ball. One day, the ball rolls away! Where did it go?",
+            "choices": [
+                { "label": "Look in the park.", "to": "park" },
+                { "label": "Look by the pond.", "to": "pond" }
+            ]
+        },
+        "park": {
+            "text": "Pip runs to the park. A cat sits on a bench. \"Did you see my ball?\" says Pip. \"Yes,\" says the cat. \"It went up the hill.\"",
+            "choices": [
+                { "label": "Go up the hill.", "to": "hill" },
+                { "label": "Go home.", "to": "home" }
+            ]
+        },
+        "pond": {
+            "text": "Pip runs to the pond. A duck swims by. Quack! \"I see a red ball,\" says the duck. \"It is up on the hill.\"",
+            "choices": [
+                { "label": "Go up the hill.", "to": "hill" },
+                { "label": "Go home.", "to": "home" }
+            ]
+        },
+        "hill": {
+            "text": "Pip runs up the hill. There is the red ball! A goat kept it safe. Pip and the goat play catch. The End.",
+            "ending": true
+        },
+        "home": {
+            "text": "Pip goes home. He is sad. But Mom has a surprise. The red ball was under the bed! The End.",
+            "ending": true
+        }
+    }
+}

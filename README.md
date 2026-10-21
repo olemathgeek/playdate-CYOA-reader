@@ -4,19 +4,47 @@ An easy-reader choose-your-own-adventure for the Playdate, made for early reader
 Big text, short sentences, and simple choices.
 
 ## Controls
+- **Main menu**: pick a story from the list, or "Keep reading" to go back to the last page you were on
 - **Down / crank**: read more of the page, then highlight a choice
 - **Up / Down**: move between choices
 - **A**: pick the highlighted choice
 - **B**: go back one page
 - **Menu button**: "title screen" or "start over"
 
-The reader's spot is saved with `playdate.datastore`, so "Keep reading" on the title
-screen picks up on the same page (with B-back history). Reaching an ending clears the save.
+Your spot (story, page and B-back history) is saved with `playdate.datastore` on every page
+and when the Playdate sleeps or quits. Reaching an ending clears the save.
 
-## Write your own story
-Edit `source/story.lua`. Each page has `text` and a list of `choices`
-(`{ label = "...", to = "page_id" }`), or `ending = true` for a last page.
-Use plain quotes, not curly ones.
+## Stories
+Each story is one JSON file in `source/stories/`. Any `.json` file there shows up in the
+main menu, sorted by title. Example: `source/stories/pip-and-the-red-ball.json`.
+
+```json
+{
+    "title": "Pip and the Red Ball",
+    "start": "start",
+    "pages": {
+        "start": {
+            "text": "Pip is a little dog. ...",
+            "choices": [
+                { "label": "Look in the park.", "to": "park" },
+                { "label": "Look by the pond.", "to": "pond" }
+            ]
+        },
+        "hill": {
+            "text": "... The End.",
+            "ending": true
+        }
+    }
+}
+```
+
+- `title`: name shown in the menu
+- `start`: id of the first page (defaults to `"start"`)
+- `pages`: object keyed by page id. Each page has `text`, plus either `choices`
+  (each `{ "label", "to" }` where `to` is another page id) or `"ending": true`.
+- Ending pages get "Read again!" and "Pick a new story" buttons automatically.
+- A story with a broken `to` link or missing `text` is skipped, and the reason is printed to the Simulator console.
+- Use plain quotes and apostrophes, not curly ones. Escape quotes inside text as `\"`.
 
 ## Build
 ```bash

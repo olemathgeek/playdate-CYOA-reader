@@ -1,7 +1,8 @@
 -- Story Paths
 -- An easy-reader choose-your-own-adventure for Playdate.
--- The story lives in story.lua. The reader's spot is saved with
--- playdate.datastore so "Continue" picks up where they left off.
+-- Stories are JSON files in source/stories/ (see README for the format).
+-- The reader's spot is saved with playdate.datastore so "Keep reading"
+-- picks up where they left off.
 --
 -- Controls:
 --   Up / Down or crank : read more, then pick a choice
@@ -9,7 +10,6 @@
 --   B                  : go back one page
 
 import "CoreLibs/graphics"
-import "story"
 
 local pd  <const> = playdate
 local gfx <const> = playdate.graphics
@@ -32,6 +32,8 @@ local CHOICE_PAD  <const> = 6
 local CHOICE_GAP  <const> = 6
 local SCROLL_STEP <const> = 40
 local SAVE_KEY    <const> = "progress"
+local STORY_DIR   <const> = "stories/"
+local TITLE_ROWS  <const> = 4      -- menu rows visible at once
 
 local STATE_TITLE <const> = 1
 local STATE_PAGE  <const> = 2
@@ -40,20 +42,71 @@ local STATE_PAGE  <const> = 2
 -- STATE
 -- ─────────────────────────────────────────────
 local state       = STATE_TITLE
-local pageId      = STORY_START
+local stories     = {}     -- { file, title, start, pages } for each valid JSON story
+local story       = nil    -- the story being read
+local pageId      = nil
 local history     = {}     -- page ids visited before this one, for B = back
 local layout      = nil    -- cached positions for the current page
 local scrollY     = 0
 local selected    = nil    -- index of highlighted choice, nil = still reading
 local titleIndex  = 1
+local titleTop    = 1      -- first menu row shown, for long story lists
 local titleItems  = {}
+
+-- ─────────────────────────────────────────────
+-- STORIES
+-- ─────────────────────────────────────────────
+-- Loads one story file and checks every choice points at a real page.
+local function loadStory(file)
+    local data = json.decodeFile(STORY_DIR .. file)
+    if type(data) ~= "table" or type(data.pages) ~= "table" then
+        print("stories/" .. file .. ": not a story (needs \"pages\")")
+        return nil
+    end
+    local start = data.start or "start"
+    if data.pages[start] == nil then
+        print("stories/" .. file .. ": no start page called '" .. start .. "'")
+        return nil
+    end
+    for id, page in pairs(data.pages) do
+        if type(page.text) ~= "string" then
+            print("stories/" .. file .. ": page '" .. id .. "' has no text")
+            return nil
+        end
+        for _, choice in ipairs(page.choices or {}) do
+            if data.pages[choice.to] == nil then
+                print("stories/" .. file .. ": page '" .. id .. "' points to missing page '" .. tostring(choice.to) .. "'")
+                return nil
+            end
+        end
+    end
+    return { file = file, title = data.title or file, start = start, pages = data.pages }
+end
+
+local function loadAllStories()
+    stories = {}
+    for _, file in ipairs(pd.file.listFiles(STORY_DIR) or {}) do
+        if file:match("%.json$") then
+            local s = loadStory(file)
+            if s then stories[#stories + 1] = s end
+        end
+    end
+    table.sort(stories, function(a, b) return a.title < b.title end)
+end
+
+local function findStory(file)
+    for _, s in ipairs(stories) do
+        if s.file == file then return s end
+    end
+    return nil
+end
 
 -- ─────────────────────────────────────────────
 -- SAVE / LOAD
 -- ─────────────────────────────────────────────
 local function saveProgress()
     if state ~= STATE_PAGE then return end
-    pd.datastore.write({ page = pageId, history = history }, SAVE_KEY)
+    pd.datastore.write({ story = story.file, page = pageId, history = history }, SAVE_KEY)
 end
 
 local function clearProgress()
@@ -62,12 +115,14 @@ end
 
 local function loadProgress()
     local data = pd.datastore.read(SAVE_KEY)
-    if data == nil or STORY[data.page] == nil then return nil end
+    if data == nil then return nil end
+    local s = findStory(data.story)
+    if s == nil or s.pages[data.page] == nil then return nil end
     local cleanHistory = {}
     for _, id in ipairs(data.history or {}) do
-        if STORY[id] then cleanHistory[#cleanHistory + 1] = id end
+        if s.pages[id] then cleanHistory[#cleanHistory + 1] = id end
     end
-    return data.page, cleanHistory
+    return s, data.page, cleanHistory
 end
 
 -- ─────────────────────────────────────────────
@@ -92,7 +147,10 @@ end
 
 local function choicesFor(page)
     if page.ending then
-        return { { label = "Read again!", restart = true } }
+        return {
+            { label = "Read again!", restart = true },
+            { label = "Pick a new story", menu = true },
+        }
     end
     return page.choices or {}
 end
@@ -126,18 +184,19 @@ end
 -- ─────────────────────────────────────────────
 local function showPage(id)
     pageId   = id
-    layout   = buildLayout(STORY[id])
+    layout   = buildLayout(story.pages[id])
     scrollY  = 0
     selected = nil
     -- Short pages: highlight the first choice right away.
     if layout.maxScroll == 0 and #layout.choices > 0 then selected = 1 end
     state = STATE_PAGE
-    if STORY[id].ending then clearProgress() else saveProgress() end
+    if story.pages[id].ending then clearProgress() else saveProgress() end
 end
 
-local function startNew()
+local function startNew(s)
+    story   = s or story
     history = {}
-    showPage(STORY_START)
+    showPage(story.start)
 end
 
 local function goTo(id)
@@ -152,17 +211,19 @@ end
 
 local function buildTitleMenu()
     titleItems = {}
-    local savedPage, savedHistory = loadProgress()
-    if savedPage then
-        titleItems[#titleItems + 1] = { label = "Keep reading", action = function()
+    local savedStory, savedPage, savedHistory = loadProgress()
+    if savedStory then
+        titleItems[#titleItems + 1] = { label = "Keep reading: " .. savedStory.title, action = function()
+            story   = savedStory
             history = savedHistory
             showPage(savedPage)
         end }
-        titleItems[#titleItems + 1] = { label = "Start over", action = startNew }
-    else
-        titleItems[#titleItems + 1] = { label = "Start", action = startNew }
+    end
+    for _, s in ipairs(stories) do
+        titleItems[#titleItems + 1] = { label = s.title, action = function() startNew(s) end }
     end
     titleIndex = 1
+    titleTop   = 1
 end
 
 local function goToTitle()
@@ -221,10 +282,10 @@ local function pageChoose()
     local choice = layout.choices[selected].data
     if choice.restart then
         startNew()
-    elseif STORY[choice.to] then
-        goTo(choice.to)
+    elseif choice.menu then
+        goToTitle()
     else
-        print("story.lua: no page called '" .. tostring(choice.to) .. "'")
+        goTo(choice.to)
     end
 end
 
@@ -240,33 +301,43 @@ local function drawFooter(hint)
 end
 
 local function drawTitle()
-    local w = fontLg:getTextWidth(STORY_TITLE)
-    if w <= TEXT_W then
-        fontLg:drawText(STORY_TITLE, (SCREEN_W - w) / 2, 50)
-    else
-        local lines = wrapText(STORY_TITLE, fontLg, TEXT_W)
-        for i, line in ipairs(lines) do
-            local lw = fontLg:getTextWidth(line)
-            fontLg:drawText(line, (SCREEN_W - lw) / 2, 30 + (i - 1) * (fontLg:getHeight() + LINE_GAP))
-        end
+    local heading = "Story Paths"
+    fontLg:drawText(heading, (SCREEN_W - fontLg:getTextWidth(heading)) / 2, 16)
+
+    if #titleItems == 0 then
+        local msg = "No stories found in source/stories/"
+        fontMd:drawText(msg, (SCREEN_W - fontMd:getTextWidth(msg)) / 2, 110)
+        drawFooter("")
+        return
     end
 
-    local boxW, boxH = 180, 30
-    for i, item in ipairs(titleItems) do
-        local x, y = (SCREEN_W - boxW) / 2, 120 + (i - 1) * (boxH + 10)
-        local tw = fontBld:getTextWidth(item.label)
+    local boxW, boxH = 320, 34
+    local x = (SCREEN_W - boxW) / 2
+    local last = math.min(#titleItems, titleTop + TITLE_ROWS - 1)
+    for i = titleTop, last do
+        local item = titleItems[i]
+        local y = 56 + (i - titleTop) * (boxH + 6)
+        local label = item.label
+        while fontBld:getTextWidth(label) > boxW - 16 and #label > 4 do
+            label = label:sub(1, -5) .. "..."
+        end
+        local tw = fontBld:getTextWidth(label)
         if i == titleIndex then
             gfx.fillRoundRect(x, y, boxW, boxH, 6)
             gfx.setImageDrawMode(gfx.kDrawModeFillWhite)
-            fontBld:drawText(item.label, x + (boxW - tw) / 2, y + (boxH - fontBld:getHeight()) / 2)
-            gfx.setImageDrawMode(gfx.kDrawModeCopy)
         else
             gfx.drawRoundRect(x, y, boxW, boxH, 6)
-            fontBld:drawText(item.label, x + (boxW - tw) / 2, y + (boxH - fontBld:getHeight()) / 2)
         end
+        fontBld:drawText(label, x + (boxW - tw) / 2, y + (boxH - fontBld:getHeight()) / 2)
+        gfx.setImageDrawMode(gfx.kDrawModeCopy)
     end
 
-    drawFooter("Up/Down: pick     A: go")
+    -- Arrows when the list is longer than the screen.
+    local cx = SCREEN_W - 20
+    if titleTop > 1 then gfx.fillTriangle(cx - 6, 64, cx + 6, 64, cx, 57) end
+    if last < #titleItems then gfx.fillTriangle(cx - 6, VIEW_H - 14, cx + 6, VIEW_H - 14, cx, VIEW_H - 7) end
+
+    drawFooter("Up/Down: pick a story     A: read")
 end
 
 local function drawPage()
@@ -314,8 +385,7 @@ end
 local menu = pd.getSystemMenu()
 menu:addMenuItem("title screen", goToTitle)
 menu:addMenuItem("start over", function()
-    clearProgress()
-    startNew()
+    if state == STATE_PAGE then startNew() end
 end)
 
 -- Save when the game is closed or the device goes to sleep.
@@ -325,6 +395,7 @@ function pd.deviceWillSleep() saveProgress() end
 -- ─────────────────────────────────────────────
 -- MAIN LOOP
 -- ─────────────────────────────────────────────
+loadAllStories()
 buildTitleMenu()
 
 function pd.update()
@@ -333,9 +404,11 @@ function pd.update()
             titleIndex = math.max(1, titleIndex - 1)
         elseif pd.buttonJustPressed(pd.kButtonDown) then
             titleIndex = math.min(#titleItems, titleIndex + 1)
-        elseif pd.buttonJustPressed(pd.kButtonA) then
+        elseif pd.buttonJustPressed(pd.kButtonA) and titleItems[titleIndex] then
             titleItems[titleIndex].action()
         end
+        if titleIndex < titleTop then titleTop = titleIndex end
+        if titleIndex > titleTop + TITLE_ROWS - 1 then titleTop = titleIndex - TITLE_ROWS + 1 end
     else
         if pd.buttonJustPressed(pd.kButtonDown) then
             pageDown()
