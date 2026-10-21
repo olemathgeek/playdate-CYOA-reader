@@ -25,7 +25,7 @@ local SCREEN_W    <const> = 400
 local SCREEN_H    <const> = 240
 local MARGIN      <const> = 14
 local TEXT_W      <const> = SCREEN_W - MARGIN * 2
-local FOOTER_H    <const> = 20
+local FOOTER_H    <const> = 26
 local VIEW_H      <const> = SCREEN_H - FOOTER_H
 local LINE_GAP    <const> = 4
 local CHOICE_PAD  <const> = 6
@@ -357,7 +357,7 @@ local function drawFooter(hint)
     gfx.fillRect(0, VIEW_H, SCREEN_W, FOOTER_H)
     gfx.setColor(gfx.kColorBlack)
     gfx.drawLine(0, VIEW_H, SCREEN_W, VIEW_H)
-    fontMd:drawText(hint, MARGIN, VIEW_H + 4)
+    fontMd:drawText(hint, MARGIN, VIEW_H + (FOOTER_H - fontMd:getHeight()) // 2 + 1)
 end
 
 local function drawTitle()
